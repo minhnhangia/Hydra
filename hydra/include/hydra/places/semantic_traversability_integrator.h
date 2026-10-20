@@ -36,10 +36,12 @@
 
 #include <config_utilities/virtual_config.h>
 
+#include <fstream>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
 #include <utility>
 
 #include "hydra/active_window/active_window_output.h"
@@ -167,7 +169,18 @@ class ProjectiveSemanticTraversabilityIntegrator
     WEIGHTED_MEAN
   };
 
+  //! Which image of the input data provides the per-pixel labels.
+  enum class InputImage {
+    //! The semantic label image, i.e. labels in the global labelspace.
+    LABEL,
+    //! The traversability image, e.g. class ids from a terrain segmentation network.
+    TRAVERSABILITY
+  };
+
   struct Config {
+    //! @brief Which input image to sample labels from.
+    InputImage input_image = InputImage::LABEL;
+
     //! @brief Maximum |measured range - cell range| for a cell to count as visible in
     //! the current frame. Negative values are multiples of the voxel size. This is the
     //! occlusion gate: without it, labels of objects in front of the floor (tables,
@@ -208,6 +221,11 @@ class ProjectiveSemanticTraversabilityIntegrator
 
     //! @brief Thresholds used to reclassify fused voxels. Should match the estimator.
     TraversabilityEstimator::Config classification;
+
+    //! @brief If set, write per-update statistics of how the semantics change the
+    //! geometric classification to this CSV file. Cells first flipped from traversable
+    //! to intraversable are additionally logged to '<stem>_flipped_cells.csv'.
+    std::string stats_path;
   } const config;
 
   explicit ProjectiveSemanticTraversabilityIntegrator(const Config& config);
@@ -294,9 +312,19 @@ class ProjectiveSemanticTraversabilityIntegrator
    * those blocks, so fusing into the others would apply the semantics on top of an
    * estimate that already contains them.
    */
-  void applyToLayer(TraversabilityLayer& layer) const;
+  void applyToLayer(TraversabilityLayer& layer, uint64_t timestamp_ns);
+
+  //! @brief Get the image labels are sampled from, according to the config.
+  const cv::Mat& getInputImage(const InputData& data) const;
+
+  //! @brief Open the statistics files if requested and not yet open.
+  void openStats();
 
   std::unique_ptr<SemanticTraversabilityLayer> state_;
+  std::ofstream stats_file_;
+  std::ofstream flipped_cells_file_;
+  //! Global indices of cells already logged as flipped.
+  Index2DSet flipped_cells_;
   const std::unique_ptr<const ProjectionInterpolator> interpolator_;
   const std::unique_ptr<const SemanticIntegrator> semantic_integrator_;
   const TraversabilityPrior::Ptr prior_;

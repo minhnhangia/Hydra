@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <future>
 
 #include "hydra/reconstruction/index_getter.h"
@@ -127,7 +128,12 @@ void declare_config(LabelSetPrior::Config& config) {
 void declare_config(ProjectiveSemanticTraversabilityIntegrator::Config& config) {
   using namespace config;
   using FusionMode = ProjectiveSemanticTraversabilityIntegrator::FusionMode;
+  using InputImage = ProjectiveSemanticTraversabilityIntegrator::InputImage;
   name("ProjectiveSemanticTraversabilityIntegrator::Config");
+  enum_field(config.input_image,
+             "input_image",
+             {{InputImage::LABEL, "label"},
+              {InputImage::TRAVERSABILITY, "traversability"}});
   field(config.max_surface_distance, "max_surface_distance", "m");
   field(config.min_incidence_cosine, "min_incidence_cosine");
   field(config.min_measurement_weight, "min_measurement_weight");
@@ -143,6 +149,7 @@ void declare_config(ProjectiveSemanticTraversabilityIntegrator::Config& config) 
   field(config.semantic_integrator, "semantic_integrator");
   field(config.prior, "prior");
   field(config.classification, "classification");
+  field(config.stats_path, "stats_path");
 
   checkCondition(config.max_surface_distance != 0.0f,
                  "'max_surface_distance' must be nonzero");
@@ -241,8 +248,8 @@ ProjectiveSemanticTraversabilityIntegrator::getCellMeasurement(const InputData& 
     return measurement;
   }
 
-  measurement.label =
-      interpolator_->interpolateID(data.label_image, measurement.interpolation_weights);
+  measurement.label = interpolator_->interpolateID(getInputImage(data),
+                                                   measurement.interpolation_weights);
   measurement.weight = weight;
   measurement.valid = true;
   return measurement;
@@ -395,8 +402,42 @@ void ProjectiveSemanticTraversabilityIntegrator::integrateFrame(
   }
 }
 
+const cv::Mat& ProjectiveSemanticTraversabilityIntegrator::getInputImage(
+    const InputData& data) const {
+  return config.input_image == InputImage::TRAVERSABILITY ? data.traversability_image
+                                                          : data.label_image;
+}
+
+void ProjectiveSemanticTraversabilityIntegrator::openStats() {
+  if (config.stats_path.empty() || stats_file_.is_open()) {
+    return;
+  }
+
+  const std::filesystem::path stats_path(config.stats_path);
+  std::filesystem::create_directories(stats_path.parent_path());
+  stats_file_.open(stats_path);
+  stats_file_ << "timestamp_ns,num_cells,num_semantic,geom_traversable,"
+                 "geom_intraversable,geom_unknown,semantic_traversable,"
+                 "trav_to_intrav,trav_to_unknown,unknown_to_intrav,unknown_to_trav,"
+                 "intrav_to_trav,trav_to_intrav_by_label\n";
+
+  auto cells_path = stats_path;
+  cells_path.replace_filename(stats_path.stem().string() + "_flipped_cells.csv");
+  flipped_cells_file_.open(cells_path);
+  flipped_cells_file_ << "timestamp_ns,x,y,z,label,semantic_weight\n";
+}
+
 void ProjectiveSemanticTraversabilityIntegrator::applyToLayer(
-    TraversabilityLayer& layer) const {
+    TraversabilityLayer& layer, uint64_t timestamp_ns) {
+  using spark_dsg::TraversabilityState;
+  // Counts over all cells of updated blocks. The estimators recompute exactly the
+  // updated blocks, so the state before fusion is the purely geometric one.
+  size_t num_cells = 0, num_semantic = 0, semantic_traversable = 0;
+  std::map<TraversabilityState, size_t> geometric;
+  std::map<std::pair<TraversabilityState, TraversabilityState>, size_t> transitions;
+  std::map<uint32_t, size_t> flips_by_label;
+
+  const auto voxel_size = layer.voxel_size;
   for (auto& geometry_block : layer) {
     if (!geometry_block.updated) {
       continue;
@@ -409,15 +450,87 @@ void ProjectiveSemanticTraversabilityIntegrator::applyToLayer(
 
     for (size_t i = 0; i < geometry_block.voxels.size(); ++i) {
       auto& voxel = geometry_block.voxels[i];
-      applyToVoxel(state_block->voxels[i], voxel);
+      const auto& cell = state_block->voxels[i];
+      const auto prev_state = voxel.state;
+      applyToVoxel(cell, voxel);
       classifyTraversabilityVoxel(config.classification, voxel);
+      if (!voxel.height) {
+        continue;
+      }
+
+      ++num_cells;
+      ++geometric[prev_state];
+      const auto semantic = evaluate(cell);
+      if (!semantic) {
+        continue;
+      }
+
+      ++num_semantic;
+      if (semantic->first >= config.classification.min_traversability) {
+        ++semantic_traversable;
+      }
+
+      if (prev_state == voxel.state) {
+        continue;
+      }
+
+      ++transitions[{prev_state, voxel.state}];
+      if (prev_state != TraversabilityState::TRAVERSABLE ||
+          voxel.state != TraversabilityState::INTRAVERSABLE) {
+        continue;
+      }
+
+      const auto label = cell.semantics.semantic_label;
+      ++flips_by_label[label];
+      if (!flipped_cells_file_.is_open()) {
+        continue;
+      }
+
+      const auto global =
+          geometry_block.globalFromLocalIndex(geometry_block.indexFromLinear(i));
+      if (!flipped_cells_.insert(Index2D(global.x(), global.y())).second) {
+        continue;
+      }
+
+      flipped_cells_file_ << timestamp_ns << "," << (global.x() + 0.5f) * voxel_size
+                          << "," << (global.y() + 0.5f) * voxel_size << ","
+                          << *voxel.height << "," << label << "," << cell.weight << "\n";
     }
   }
+
+  if (!stats_file_.is_open()) {
+    return;
+  }
+
+  const auto count = [&](TraversabilityState from, TraversabilityState to) {
+    const auto iter = transitions.find({from, to});
+    return iter == transitions.end() ? 0 : iter->second;
+  };
+
+  using S = TraversabilityState;
+  stats_file_ << timestamp_ns << "," << num_cells << "," << num_semantic << ","
+              << geometric[S::TRAVERSABLE] << "," << geometric[S::INTRAVERSABLE] << ","
+              << geometric[S::UNKNOWN] << "," << semantic_traversable << ","
+              << count(S::TRAVERSABLE, S::INTRAVERSABLE) << ","
+              << count(S::TRAVERSABLE, S::UNKNOWN) << ","
+              << count(S::UNKNOWN, S::INTRAVERSABLE) << ","
+              << count(S::UNKNOWN, S::TRAVERSABLE) << ","
+              << count(S::INTRAVERSABLE, S::TRAVERSABLE) << ",";
+  bool first = true;
+  for (const auto& [label, num] : flips_by_label) {
+    stats_file_ << (first ? "" : ";") << label << ":" << num;
+    first = false;
+  }
+
+  stats_file_ << "\n";
+  stats_file_.flush();
+  flipped_cells_file_.flush();
 }
 
 void ProjectiveSemanticTraversabilityIntegrator::apply(const ActiveWindowOutput& msg,
                                                        TraversabilityLayer& layer) {
   initialize(layer);
+  openStats();
   pruneArchived(layer);
 
   const auto block_indices = layer.allocatedBlockIndices();
@@ -429,7 +542,7 @@ void ProjectiveSemanticTraversabilityIntegrator::apply(const ActiveWindowOutput&
   // them before applying the result once.
   bool integrated = false;
   for (const auto& data : msg.sensor_data) {
-    if (!data || data->label_image.empty()) {
+    if (!data || getInputImage(*data).empty()) {
       continue;
     }
 
@@ -444,7 +557,7 @@ void ProjectiveSemanticTraversabilityIntegrator::apply(const ActiveWindowOutput&
 
   // Blocks recomputed by the estimator this update lost their semantics, so re-apply
   // the accumulated state even if no new labels were observed.
-  applyToLayer(layer);
+  applyToLayer(layer, msg.timestamp_ns);
 }
 
 }  // namespace hydra::places
