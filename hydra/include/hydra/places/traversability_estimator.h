@@ -144,6 +144,12 @@ class HeightTraversabilityEstimator : public TraversabilityEstimator {
 
     //! @brief Minimum TSDF weight for a voxel to count as observed.
     float min_weight = 1.0e-6f;
+
+    //! @brief Band around the robot body searched for the walkable surface height in
+    //! meters. Negative values use height_below / height_above. Set these when the
+    //! obstacle slab excludes the ground (e.g. a legged robot's raised body).
+    float surface_height_below = -1.0f;
+    float surface_height_above = -1.0f;
   };
 
   HeightTraversabilityEstimator(const Config& config);

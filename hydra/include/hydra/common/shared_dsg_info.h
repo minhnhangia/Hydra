@@ -53,7 +53,9 @@ struct SharedDsgInfo {
         {spark_dsg::DsgLayers::MESH_PLACES, {3, 1}},
         {spark_dsg::DsgLayers::TRAVERSABILITY, {3, 2}},
         {spark_dsg::DsgLayers::ROOMS, 4},
-        {spark_dsg::DsgLayers::BUILDINGS, 5},
+        {spark_dsg::DsgLayers::CONNECTORS, {4, 1}},
+        {spark_dsg::DsgLayers::FLOORS, 5},
+        {spark_dsg::DsgLayers::BUILDINGS, 6},
         {spark_dsg::DsgLayers::AGENTS, 2},
     };
   } const config;

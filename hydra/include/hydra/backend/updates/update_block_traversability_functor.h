@@ -36,6 +36,8 @@
 #include <config_utilities/factory.h>
 #include <spark_dsg/traversability_boundary.h>
 
+#include <limits>
+
 #include "hydra/backend/deformation_interpolator.h"
 #include "hydra/backend/update_functions.h"
 #include "hydra/utils/active_window_tracker.h"
@@ -65,6 +67,13 @@ struct UpdateBlockTraversabilityFunctor : public UpdateFunctor {
     //! If false, compute the topoligcal distance to occupied space. If true, use metric
     //! distance.
     bool use_metric_distance = false;
+
+    //! Maximum height difference between two places that are merged [m]. Keeps
+    //! overlapping places on different floors (or stair steps) apart.
+    double max_merge_dz = std::numeric_limits<double>::infinity();
+
+    //! Maximum height difference between two places that are connected [m].
+    double max_connect_dz = std::numeric_limits<double>::infinity();
 
     DeformationInterpolator::Config deformation;
   } const config;

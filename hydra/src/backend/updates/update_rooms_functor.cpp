@@ -37,8 +37,10 @@
 #include <config_utilities/config.h>
 #include <config_utilities/validation.h>
 #include <glog/logging.h>
+#include <nlohmann/json.hpp>
 #include <spark_dsg/node_symbol.h>
 
+#include "hydra/backend/updates/update_floors_functor.h"
 #include "hydra/utils/timing_utilities.h"
 
 using namespace spark_dsg;
@@ -60,6 +62,7 @@ void declare_config(UpdateRoomsFunctor::Config& config) {
   name("UpdateRoomsFunctor::Config");
   field(config.room_finder, "room_finder");
   field(config.places_layer, "places_layer");
+  field(config.split_by_floor, "split_by_floor");
   field(config.sinks, "sinks");
 }
 
@@ -108,11 +111,58 @@ void UpdateRoomsFunctor::call(const SceneGraph&,
   ScopedTimer timer("backend/room_detection", info->timestamp_ns, true, 1, false);
 
   // TODO(nathan) pass in timestamp?
-  auto rooms = room_finder->findRooms(*places_layer);
+  SceneGraphLayer::Ptr split;
+  if (config.split_by_floor) {
+    split = splitByFloor(*places_layer);
+  }
+
+  auto rooms = room_finder->findRooms(split ? *split : *places_layer);
   rewriteRooms(rooms.get(), *dsg.graph);
   room_finder->addRoomPlaceEdges(*dsg.graph, config.places_layer);
+  if (config.split_by_floor) {
+    tagRoomFloors(*dsg.graph);
+  }
   Sink::callAll(sinks_, info->timestamp_ns, *room_finder);
   return;
+}
+
+SceneGraphLayer::Ptr UpdateRoomsFunctor::splitByFloor(const SceneGraphLayer& places) const {
+  auto split = places.clone([](const SceneGraphNode& node) {
+    return !getFloorTag(node.attributes(), "connector_id");
+  });
+
+  std::vector<std::pair<NodeId, NodeId>> to_remove;
+  for (const auto& edge : split->edges()) {
+    const auto source = getFloorTag(split->getNode(edge.source).attributes(), "floor_id");
+    const auto target = getFloorTag(split->getNode(edge.target).attributes(), "floor_id");
+    if (isCrossFloorEdge(*edge.info) || (source && target && *source != *target)) {
+      to_remove.emplace_back(edge.source, edge.target);
+    }
+  }
+
+  for (const auto& [source, target] : to_remove) {
+    split->removeEdge(source, target);
+  }
+
+  return split;
+}
+
+void UpdateRoomsFunctor::tagRoomFloors(SceneGraph& graph) const {
+  for (const auto& room : graph.getLayer(DsgLayers::ROOMS).nodes()) {
+    std::map<NodeId, size_t> votes;
+    for (const auto child : room.children()) {
+      const auto floor = getFloorTag(graph.getNode(child).attributes(), "floor_id");
+      if (floor) {
+        ++votes[*floor];
+      }
+    }
+
+    const auto best = std::max_element(votes.begin(), votes.end(), [](const auto& a, const auto& b) {
+      return a.second < b.second;
+    });
+    room.attributes().metadata.add(nlohmann::json{
+        {"floor_id", best == votes.end() ? nlohmann::json(nullptr) : nlohmann::json(best->first)}});
+  }
 }
 
 }  // namespace hydra

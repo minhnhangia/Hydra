@@ -12,13 +12,16 @@ add_executable(
   eval/test_evaluation.cpp
   src/resources.cpp
   backend/test_deformation_interpolator.cpp
+  backend/test_dsg_updater.cpp
   backend/test_external_loop_closure.cpp
   backend/test_merge_tracker.cpp
   backend/test_mst_factors.cpp
   backend/updates/test_generic_update_functor.cpp
   backend/updates/test_ib_objects_update_functor.cpp
   backend/updates/test_update_agents_functor.cpp
+  backend/updates/test_floor_hierarchy.cpp
   backend/updates/test_update_buildings_functor.cpp
+  backend/updates/test_update_floors_functor.cpp
   backend/updates/test_update_gt_rooms_functor.cpp
   backend/updates/test_update_objects_functor.cpp
   backend/updates/test_update_places_functor.cpp

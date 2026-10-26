@@ -40,7 +40,11 @@
 #include <spark_dsg/edge_attributes.h>
 #include <spark_dsg/node_symbol.h>
 
+#include <cmath>
+#include <limits>
+#include <nlohmann/json.hpp>
 #include <queue>
+#include <vector>
 
 #include "hydra/utils/timing_utilities.h"
 
@@ -53,25 +57,56 @@ static const auto registration =
                                    BlockTraversabilityClustering::Config>(
         "BlockTraversabilityClustering");
 
-std::optional<float> getHeight(const BlockTraversabilityClustering::InfoBlock& info,
-                               const BlockTraversabilityClustering::PlaceInfo& place) {
-  float z_value = 0.0;
-  size_t num_heights = 0;
+struct HeightStats {
+  double mean = 0.0;
+  double min = 0.0;
+  double max = 0.0;
+  //! Slope of the plane fitted to the surface heights (NaN if too few heights)
+  double slope_deg = std::numeric_limits<double>::quiet_NaN();
+};
+
+std::optional<HeightStats> getHeights(const BlockTraversabilityClustering::InfoBlock& info,
+                                      const BlockTraversabilityClustering::PlaceInfo& place) {
+  const double voxel_size = info.block_size / info.voxels_per_side;
+  std::vector<Eigen::Vector3d> points;
   for (size_t x = place.range.x_start; x <= place.range.x_end; ++x) {
     for (size_t y = place.range.y_start; y <= place.range.y_end; ++y) {
       const auto& voxel = info.voxel(x, y);
       if (voxel.height) {
-        z_value += *voxel.height;
-        ++num_heights;
+        points.emplace_back(x * voxel_size, y * voxel_size, *voxel.height);
       }
     }
   }
 
-  if (!num_heights) {
+  if (points.empty()) {
     return std::nullopt;
   }
 
-  return z_value / num_heights;
+  HeightStats stats;
+  stats.min = points.front().z();
+  stats.max = stats.min;
+  for (const auto& p : points) {
+    stats.mean += p.z();
+    stats.min = std::min(stats.min, p.z());
+    stats.max = std::max(stats.max, p.z());
+  }
+  stats.mean /= points.size();
+
+  // least-squares plane z = a x + b y + c
+  if (points.size() >= 3) {
+    Eigen::MatrixXd A(points.size(), 3);
+    Eigen::VectorXd b(points.size());
+    for (size_t i = 0; i < points.size(); ++i) {
+      A.row(i) << points[i].x(), points[i].y(), 1.0;
+      b(i) = points[i].z();
+    }
+    const Eigen::Vector3d coeffs = A.colPivHouseholderQr().solve(b);
+    if (A.colPivHouseholderQr().rank() == 3) {
+      stats.slope_deg = std::atan(coeffs.head<2>().norm()) * 180.0 / M_PI;
+    }
+  }
+
+  return stats;
 }
 
 }  // namespace
@@ -563,8 +598,23 @@ void BlockTraversabilityClustering::updatePlaceNodeAttributes(
   Boundary(place.boundary_info).toAttributes(attrs);
 
   // attempt to use voxel height values for place z value, and fallback to current z
-  const auto z_value = getHeight(block, place);
-  attrs.position.z() = z_value.value_or(msg.world_T_body().translation().z());
+  const auto heights = getHeights(block, place);
+  attrs.position.z() =
+      heights ? heights->mean : msg.world_T_body().translation().z();
+
+  // footprint and height range of the surface
+  const auto& min = place.boundary_info.min;
+  const auto& max = place.boundary_info.max;
+  const double z_min = heights ? heights->min : attrs.position.z();
+  const double z_max = heights ? heights->max : attrs.position.z();
+  attrs.bounding_box = spark_dsg::BoundingBox(
+      Eigen::Vector3f(max.x() - min.x(), max.y() - min.y(), z_max - z_min),
+      Eigen::Vector3f(0.5 * (min.x() + max.x()), 0.5 * (min.y() + max.y()),
+                      0.5 * (z_min + z_max)));
+  attrs.metadata.add(nlohmann::json{
+      {"slope_deg",
+       heights && !std::isnan(heights->slope_deg) ? nlohmann::json(heights->slope_deg)
+                                                  : nlohmann::json(nullptr)}});
 
   // General attributes.
   attrs.last_update_time_ns = current_time_ns_;

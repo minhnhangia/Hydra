@@ -57,7 +57,9 @@ bool GvdParentTracker::add(const GvdVoxel& voxel, const GlobalIndex& index) {
 uint8_t GvdParentTracker::add_unique(const VoronoiCheckConfig& config,
                                      const GlobalIndex& voxel,
                                      const GvdVoxel& neighbor) {
-  auto& curr_parents = parents_.at(voxel);
+  // the voxel is normally registered by add(); a lidar replay of the Isaac multi-floor
+  // bag reached here without it (std::out_of_range from at()), so start an empty set
+  auto& curr_parents = parents_[voxel];
 
   uint8_t curr_extra_basis = curr_parents.size();
   for (const auto& other : curr_parents) {

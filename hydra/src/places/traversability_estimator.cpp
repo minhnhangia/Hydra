@@ -233,6 +233,8 @@ void declare_config(HeightTraversabilityEstimator::Config& config) {
   field(config.height_above, "height_above", "m");
   field(config.height_below, "height_below", "m");
   field(config.min_weight, "min_weight");
+  field(config.surface_height_below, "surface_height_below", "m");
+  field(config.surface_height_above, "surface_height_above", "m");
   checkCondition(config.height_above >= -config.height_below,
                  "'height_above' and 'height_below' don't span any volume");
 }
@@ -288,13 +290,17 @@ void HeightTraversabilityEstimator::computeTraversability(const ActiveWindowOutp
 
   const auto curr_z = msg.world_T_body().translation().z();
 
-  // Surface heights for the same volume, so every voxel carries a height (2.5D).
-  const HeightMap height_map = extractHeightMap(*tsdf_layer_,
-                                                updated_blocks_2d,
-                                                curr_z,
-                                                config.height_below,
-                                                config.height_above,
-                                                config.min_weight);
+  // Surface heights (by default for the same volume), so every voxel carries a height
+  // (2.5D).
+  const HeightMap height_map = extractHeightMap(
+      *tsdf_layer_,
+      updated_blocks_2d,
+      curr_z,
+      config.surface_height_below < 0.0f ? config.height_below
+                                         : config.surface_height_below,
+      config.surface_height_above < 0.0f ? config.height_above
+                                         : config.surface_height_above,
+      config.min_weight);
 
   const VoxelKey min_height =
       tsdf_layer_->getVoxelKey(Point(0, 0, curr_z - config.height_below));

@@ -45,6 +45,10 @@ struct UpdateBuildingsFunctor : public UpdateFunctor {
   void call(const spark_dsg::SceneGraph& unmerged,
             SharedDsgInfo& dsg,
             const UpdateInfo::ConstPtr& info) const override;
+
+ protected:
+  //! building -> floors -> rooms, plus room <-> connector edges
+  void updateWithFloors(spark_dsg::SceneGraph& graph, spark_dsg::NodeId building_id) const;
 };
 
 void declare_config(UpdateBuildingsFunctor::Config& config);

@@ -44,6 +44,8 @@ struct UpdateRoomsFunctor : public UpdateFunctor {
   struct Config {
     RoomFinderConfig room_finder;
     std::string places_layer = spark_dsg::DsgLayers::PLACES;
+    //! Keep rooms on one floor using the tags written by UpdateFloorsFunctor
+    bool split_by_floor = false;
     std::vector<Sink::Factory> sinks = {};
   } const config;
 
@@ -55,6 +57,12 @@ struct UpdateRoomsFunctor : public UpdateFunctor {
 
   void rewriteRooms(const spark_dsg::SceneGraphLayer* new_rooms,
                     spark_dsg::SceneGraph& graph) const;
+
+  //! Places outside connectors, without edges between floors
+  spark_dsg::SceneGraphLayer::Ptr splitByFloor(const spark_dsg::SceneGraphLayer& places) const;
+
+  //! Tag each room with the floor most of its places are on
+  void tagRoomFloors(spark_dsg::SceneGraph& graph) const;
 
   std::unique_ptr<RoomFinder> room_finder;
 

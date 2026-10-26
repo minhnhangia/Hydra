@@ -60,6 +60,8 @@ void declare_config(UpdateBlockTraversabilityFunctor::Config& config) {
   field(config.max_place_size, "max_place_size", "m");
   field(config.tolerance, "tolerance", "m");
   field(config.use_metric_distance, "use_metric_distance");
+  field(config.max_merge_dz, "max_merge_dz", "m");
+  field(config.max_connect_dz, "max_connect_dz", "m");
   field(config.deformation, "deformation");
 
   check(config.min_place_size, GT, 0.0, "min_place_size");
@@ -219,6 +221,10 @@ MergeList UpdateBlockTraversabilityFunctor::findNodeMerges(
         continue;
       }
 
+      if (std::abs(from_attrs.position.z() - to_attrs.position.z()) > config.max_merge_dz) {
+        continue;
+      }
+
       // Check boundaries.
       auto to_boundary = Boundary(to_attrs);
       if (!to_boundary.intersects(from_boundary)) {
@@ -365,6 +371,10 @@ std::vector<NodeId> UpdateBlockTraversabilityFunctor::findConnections(
   for (const auto to_id : nn_->findRadius(from_attrs.position, radius_, false)) {
     const auto& to_attrs =
         dsg.getNode(to_id).attributes<TraversabilityNodeAttributes>();
+
+    if (std::abs(from_attrs.position.z() - to_attrs.position.z()) > config.max_connect_dz) {
+      continue;
+    }
 
     if (hasTraversableOverlap(from_attrs, to_attrs)) {
       connections.emplace_back(to_id);

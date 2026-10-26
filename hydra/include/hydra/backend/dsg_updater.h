@@ -39,6 +39,8 @@
 
 #include <map>
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "hydra/backend/merge_tracker.h"
 #include "hydra/common/output_sink.h"
@@ -100,7 +102,8 @@ class DsgUpdater {
 
   GroupedMergeTracker merge_tracker;
   const std::set<std::string> exhaustive_names_;
-  std::map<std::string, UpdateFunctor::Ptr> update_functors_;
+  //! Functors in the order they appear in the config (not sorted by name)
+  std::vector<std::pair<std::string, UpdateFunctor::Ptr>> update_functors_;
 
   std::vector<spark_dsg::NodeId> active_nodes_to_restore_;
   spark_dsg::SceneGraph::Ptr source_graph_;

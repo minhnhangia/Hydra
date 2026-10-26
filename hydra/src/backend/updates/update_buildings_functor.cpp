@@ -41,6 +41,10 @@
 #include <spark_dsg/node_symbol.h>
 #include <spark_dsg/scene_graph.h>
 
+#include <set>
+
+#include "hydra/backend/updates/update_floors_functor.h"
+
 using namespace spark_dsg;
 
 namespace hydra {
@@ -63,6 +67,12 @@ void UpdateBuildingsFunctor::call(const SceneGraph&,
                                   SharedDsgInfo& dsg,
                                   const UpdateInfo::ConstPtr&) const {
   const NodeSymbol building_id('B', 0);
+  const auto floors = dsg.graph->findLayer(DsgLayers::FLOORS);
+  if (floors && floors->numNodes()) {
+    updateWithFloors(*dsg.graph, building_id);
+    return;
+  }
+
   const auto& rooms = dsg.graph->getLayer(DsgLayers::ROOMS);
 
   if (!rooms.numNodes()) {
@@ -90,6 +100,71 @@ void UpdateBuildingsFunctor::call(const SceneGraph&,
   for (const auto& node : rooms.nodes()) {
     // add an edge while enforcing single parent
     dsg.graph->insertEdge(building_id, node.id, nullptr, true);
+  }
+}
+
+void UpdateBuildingsFunctor::updateWithFloors(SceneGraph& graph, NodeId building_id) const {
+  // building -> floors
+  const auto& floors = graph.getLayer(DsgLayers::FLOORS);
+  Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+  for (const auto& node : floors.nodes()) {
+    centroid += node.attributes().position;
+  }
+  centroid /= floors.numNodes();
+
+  if (!graph.hasNode(building_id)) {
+    NodeAttributes::Ptr attrs(new NodeAttributes());
+    attrs->position = centroid;
+    graph.emplaceNode(DsgLayers::BUILDINGS, building_id, std::move(attrs));
+  } else {
+    graph.getNode(building_id).attributes().position = centroid;
+  }
+
+  for (const auto& node : floors.nodes()) {
+    graph.insertEdge(building_id, node.id, nullptr, true);
+  }
+
+  // floors -> rooms (rooms are tagged with their floor by UpdateRoomsFunctor)
+  const auto rooms = graph.findLayer(DsgLayers::ROOMS);
+  if (!rooms) {
+    return;
+  }
+
+  std::vector<NodeId> orphans;
+  for (const auto& room : rooms->nodes()) {
+    const auto floor = getFloorTag(room.attributes(), "floor_id");
+    if (floor && graph.hasNode(*floor)) {
+      graph.insertEdge(*floor, room.id, nullptr, true);
+    } else {
+      orphans.push_back(room.id);
+    }
+  }
+
+  for (const auto room : orphans) {
+    // without a floor, a room still belongs to the building
+    graph.insertEdge(building_id, room, nullptr, true);
+  }
+
+  // rooms <-> connectors where a room's place is next to a connector's place
+  const auto connectors = graph.findLayer(DsgLayers::CONNECTORS);
+  if (!connectors) {
+    return;
+  }
+
+  for (const auto& connector : connectors->nodes()) {
+    std::set<NodeId> touching;
+    for (const auto child : connector.children()) {
+      for (const auto neighbor : graph.getNode(child).siblings()) {
+        const auto room = graph.getNode(neighbor).getParent();
+        if (room && rooms->hasNode(*room)) {
+          touching.insert(*room);
+        }
+      }
+    }
+
+    for (const auto room : touching) {
+      graph.insertEdge(room, connector.id);
+    }
   }
 }
 

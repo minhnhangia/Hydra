@@ -43,7 +43,9 @@ inline SharedDsgInfo::Ptr makeSharedDsg() {
                           {spark_dsg::DsgLayers::OBJECTS, 2},
                           {spark_dsg::DsgLayers::PLACES, 3},
                           {spark_dsg::DsgLayers::ROOMS, 4},
-                          {spark_dsg::DsgLayers::BUILDINGS, 5}}}));
+                          {spark_dsg::DsgLayers::CONNECTORS, {4, 1}},
+                          {spark_dsg::DsgLayers::FLOORS, 5},
+                          {spark_dsg::DsgLayers::BUILDINGS, 6}}}));
 }
 
 }  // namespace hydra::test
